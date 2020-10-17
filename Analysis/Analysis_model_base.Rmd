@@ -1,0 +1,993 @@
+---
+title: "Data Analysis of Social Contagion Effect"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+
+## Loading
+
+```{r}
+rm(list = ls())
+library(ggplot2);library(ggsignif);library(plyr);library(ggsignif);library(ggcorrplot);library(cowplot);library(psych);library(lme4);library(lmerTest);library(MASS);library(cocor);library(moments);library(rela);library(factoextra);library(dplyr);library(tidyr);library(car);library(afex);library(corrplot)
+
+setwd("F:/Lusha Lab/writing up")
+Data_free=read.csv("F:/Lusha Lab/writing up/All_Data_model_free.csv")
+Data=read.csv("F:/Lusha Lab/writing up/All_Data_model_base.csv")
+Data_model=Data
+Data_pre=read.csv("F:/Lusha Lab/writing up/All_Data_predict.csv")
+questionaire=read.csv("F:/Lusha Lab/writing up/question.csv")
+```
+
+
+
+# Prediction
+```{r}
+Data_pre$correct=(Data_pre$ChooseGamble==Data_pre$Choice)*1
+df=Data_pre
+mean=aggregate(df$correct,by=list(df$id,df$session,df$seq),FUN=mean)
+sd=aggregate(df$correct,by=list(df$id,df$session,df$seq),FUN=sd) 
+N=aggregate(df$correct,by=list(df$id,df$session,df$seq),FUN=length)
+df2=data.frame(mean,sd=sd$x,N=N$x) 
+colnames(df2)=c("id","session","seq","correct","sd","N")
+df2$se = df2$sd / sqrt(df2$N) 
+
+ggplot()+
+  geom_line(data=df2,aes(x=seq,y=correct,color=factor(session)),size=2)+
+  scale_y_continuous(breaks=c(0,0.5,1),labels=c("0%","50%","100%"))+
+  scale_x_continuous(breaks=c(0,1,2),labels=c("start","middle","end"))+
+  theme(axis.text.x=element_text(angle=45, vjust=1, size=10, hjust=1))+
+  facet_wrap(~id, nrow=6, ncol = 8, scales = "fixed")
+
+```
+
+# exclude subjects
+```{r}
+Data$First_distance=Data$Observee2-Data$Session_1
+Data$Second_distance=Data$Observee4-Data$Session_3
+Data$Averse_distance=Data$First_distance
+Data$Seeking_distance=Data$First_distance
+
+Data$Averse_distance[!(Data$id%%2)]=Data$Second_distance[!Data$id%%2]
+Data$Seeking_distance[!(!(Data$id%%2))]=Data$Second_distance[!(!(Data$id%%2))]
+Data$Averse_distance=-Data$Averse_distance
+
+Data=Data %>% unite("code",Domain,id,sep="_",remove=FALSE)
+Data$Domain[Data$Domain==1]="Gain"
+Data$Domain[Data$Domain==2]="Loss"
+oldData=Data
+exclude=c("1_16","1_7","2_12","2_10","2_14")
+Data=Data[!(Data$code %in% exclude),]
+
+```
+
+#Initial risk-preference
+```{r}
+Start1<-sort(Data$Session_1[Data$Domain=="Gain"]);Start2<-sort(Data$Session_1[Data$Domain=="Loss"])
+
+theme<-theme(axis.line.x = element_line(size=1),axis.line.y = element_line(size=1),
+             axis.ticks.x = element_line(size=1),axis.ticks.y = element_line(size=1),
+             axis.text.x=element_text(colour="black",size=18),
+             axis.text.y=element_text(size=14,face="plain",colour="black"), 
+             legend.title = element_text(size=16),
+             legend.text = element_text(size=16),
+             axis.title.y=element_text(size = 18,face="plain"), 
+             axis.title.x=element_text(size = 18,face="plain"),
+             panel.border = element_blank(),axis.line = element_line(colour = "black",size=1), 
+             panel.grid.major = element_blank(),   
+             panel.grid.minor = element_blank())
+
+Obs_averse=mean(Data$Obs_averse)
+Obs_seeking=mean(Data$Obs_seeking)
+
+
+gainLen=length(Data$Domain[Data$Domain=="Gain"])
+lossLen=length(Data$Domain[Data$Domain=="Loss"])
+Domain <- c(rep(c("Gain"),each=gainLen),rep(c("Loss"),each=lossLen)) 
+D0<-Data
+D0$Domain <- factor(Domain) 
+D<- D0[c('Domain','Session_1')] 
+
+fig1=ggplot(D, aes(x= Domain,y=Session_1,fill=Domain)) + 
+  geom_hline(yintercept=c(Obs_averse,0,Obs_seeking), color=c('black','gray','black'), size=1)+
+  geom_violin(trim=F,colour="white",alpha=0.7)+
+  scale_fill_manual(values=c("#77CCEE", "#77CCEE"))+
+  geom_dotplot(binaxis='y', stackdir='center',width = 3,dotsize=1,color="black",fill="black")+
+  geom_signif(y_position=c(0.028), xmin=c(1), xmax=c(2), annotation=c("*"), tip_length=0, size=0.4, textsize = 7,vjust = 0)+
+  theme_bw()+ 
+  guides(fill=F)+
+  theme+ 
+  ylab("Risk Preference")+xlab("Decision Frame")+ylim(c(-0.04,0.03))
+jpeg(file = "aFig1_start.jpg",width =1600,height = 1600,units = "px",res =300)
+fig1
+dev.off()
+fig1
+
+shapiro.test(Start1)
+shapiro.test(Start2)
+t.test(Start1,Start2,paired = FALSE)
+
+```
+```{r}
+risk_model=c(Data_model$Session1,Data_model$Session_2,Data_model$Session_3,Data_model$Session_4)
+risk_free=c(Data_free$Session1,Data_free$Session_2,Data_free$Session_3,Data_free$Session_4)
+
+fig0=ggplot(data=NULL, aes(x=risk_model,y=risk_free))+ 
+  geom_point(size=5,alpha=0.5,color="black")+
+  geom_smooth(method=lm,se=F,size=1.3,alpha=1,color="blue")+
+  theme_bw()+ ylab("Model-free risk-preference")+xlab("Model-based risk-preference")+ylim(c(-0.45,0.45))+theme
+
+jpeg(file = "aFig0_free_vs_base.jpg",width =1600,height = 1600,units = "px",res =300)
+fig0
+dev.off()
+fig0
+```
+```{r}
+data_averse=Data[,c("Domain","id","Averse_contagion","Averse_distance")]
+colnames(data_averse)=c("Domain","id","contagion","distance")
+data_averse$Risk=rep("Averse",length(data_averse$id))
+data_seeking=Data[,c("Domain","id","Seeking_contagion","Seeking_distance")]
+colnames(data_seeking)=c("Domain","id","contagion","distance")
+data_seeking$Risk=rep("Seeking",length(data_seeking$id))
+
+NewData=rbind(data_averse,data_seeking)
+```
+
+```{r}
+LossCon=NewData$contagion[NewData$Domain=="Gain"]
+GainCon=NewData$contagion[NewData$Domain=="Loss"]
+
+t.test(LossCon,paired = FALSE)
+t.test(GainCon,paired = FALSE)
+t.test(LossCon,GainCon,paired = FALSE)
+```
+```{r}
+mean<-c(mean(GainCon),mean(LossCon)) 
+se<-c(sd(GainCon)/sqrt(length(GainCon)),sd(LossCon)/sqrt(length(LossCon))) 
+data0<-data.frame(c("Gain","Loss"),mean,se) 
+colnames(data0)=c("Domain","Contagion","se")
+
+WORD_SIZE = 15
+fig2a=ggplot(data0, aes(x=Domain,y=Contagion,fill=Domain))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.6,size=1)+
+  scale_fill_manual(values=c("#77CCEE", "#77CCEE"))+
+  geom_errorbar(aes(ymin=Contagion-se,ymax=Contagion+se),width=0.1, position=position_dodge(0.9),size=1,color="black")+
+  geom_signif(y_position=c(0.012),xmin=c(1),xmax=c(1),annotation=c("***"),tip_length=0,size=0,textsize=7,vjust=0.5)+
+  geom_signif(y_position=c(0.012),xmin=c(2),xmax=c(2),annotation=c("***"),tip_length=0,size=0,textsize=7,vjust=0.5)+
+  geom_signif(y_position=c(0.015),xmin=c(1),xmax=c(2),annotation=c("n.s."),tip_length=0,size=0,textsize=5,vjust=0)+
+  labs(x="Decision Frame", y="Contagion Effect")+
+  theme_bw()+
+  #geom_jitter(data=NewData,aes(x=factor(Domain),y=contagion,fill=factor(Domain)),position=position_jitter(0.4),alpha=0.5)+
+  guides(fill=F)+
+  theme+ylim(c(-0,0.016))
+```
+
+# Risk-preference
+```{r}
+AverCon=Data$Averse_contagion
+SeekCon=Data$Seeking_contagion
+
+t.test(AverCon,paired = FALSE)
+t.test(SeekCon,paired = FALSE)
+t.test(AverCon,SeekCon,paired = TRUE)
+```
+
+```{r}
+mean<-c(mean(AverCon),mean(SeekCon)) 
+
+sd<-c(sd(AverCon),sd(SeekCon)) 
+se<-c(sd(AverCon)/sqrt(length(AverCon)),sd(SeekCon)/sqrt(length(SeekCon))) 
+data0<-data.frame(c("Averse","Seeking"),mean,sd,se) 
+colnames(data0)=c("Risk","Contagion","sd","se")
+
+WORD_SIZE = 15
+fig2b=ggplot(data0, aes(x=factor(Risk),y=Contagion,fill=factor(Risk)))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.6,size=1)+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  geom_errorbar(aes(ymin=Contagion-se,ymax=Contagion+se),width=0.1, position=position_dodge(0.9),size=1,color="black")+
+  geom_signif(y_position=c(0.012),xmin=c(1),xmax=c(1),annotation=c("***"),tip_length=0,size=0,textsize=7,vjust=0.5)+
+  geom_signif(y_position=c(0.012),xmin=c(2),xmax=c(2),annotation=c("***"),tip_length=0,size=0,textsize=7,vjust=0.5)+
+  geom_signif(y_position=c(0.015),xmin=c(1),xmax=c(2),annotation=c("***"),tip_length=0,size=0,textsize=7,vjust=0.5)+
+  labs(x="Observee's Risk-preference", y="Contagion Effect")+
+  theme_bw()+
+  guides(fill=F)+
+  theme+ylim(c(-0,0.016))
+  #geom_jitter(data=NewData,aes(x=factor(Risk),y=contagion,fill=factor(Risk)),position=position_jitter(0.4),alpha=0.5)
+  
+fig2=plot_grid(fig2a,fig2b,  ncol = 2)
+
+jpeg(file = "aFig2_Allcontagion.jpg",width =2400,height = 1400,units = "px",res =300) 
+fig2
+dev.off()
+fig2
+
+```
+# Interaction of contagion
+```{r}
+lm1=lm(contagion~Domain*Risk,data=NewData)
+summary(lm1)
+
+summary(aov(contagion~Domain*Risk+Error(id/Risk),data=NewData))
+```
+```{r}
+t.test(Data$Seeking_contagion[Data$Domain=="Gain"],Data$Averse_contagion[Data$Domain=="Gain"],paired = TRUE)
+t.test(Data$Seeking_contagion[Data$Domain=="Loss"],Data$Averse_contagion[Data$Domain=="Loss"],paired = TRUE)
+
+t.test(Data$Averse_contagion[Data$Domain=="Gain"],Data$Averse_contagion[Data$Domain=="Loss"],paired = FALSE)
+t.test(Data$Seeking_contagion[Data$Domain=="Gain"],Data$Seeking_contagion[Data$Domain=="Loss"],paired = FALSE)
+
+```
+
+```{r}
+df=NewData
+mean=aggregate(df$contagion,by=list(df$Domain,df$Risk),FUN=mean)
+sd=aggregate(df$contagion,by=list(df$Domain,df$Risk),FUN=sd) 
+N=aggregate(df$contagion,by=list(df$Domain,df$Risk),FUN=length)
+data2=data.frame(mean,sd=sd$x,N=N$x) 
+colnames(data2)=c("Domain","Risk","contagion","sd","N")
+data2$se = data2$sd / sqrt(data2$N) 
+
+fig3=ggplot(data2, aes(x=Domain,y=contagion,fill=Risk))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.9,size=1)+
+  geom_errorbar(aes(ymin=contagion-se,ymax=contagion+se),width=0.2, size=1,position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  geom_signif(y_position=c(0.016),xmin=c(1.775),xmax=c(2.225),annotation=c("***"),tip_length=0.05, size=0.4, textsize=7,vjust=0.5)+
+  geom_signif(y_position=c(0.016),xmin=c(0.775),xmax=c(1.225),annotation=c("n.s."),tip_length=0.05, size=0.4, textsize=5,vjust=0)+
+  
+  labs(x="Decision Frame", y="Contagion Effect", fill="Observee's 
+risk preference")+
+  theme_bw()+
+  theme
+
+jpeg(file = "aFig3_InterContagion.jpg",width =2200,height = 1400,units = "px",res =300) 
+fig3
+dev.off()
+fig3
+```
+
+```{r}
+len_id=length(Data$id)
+code=rep(Data$code,2)
+id=rep(Data$id,2)
+Domain=rep(Data$Domain,2)
+Data$SeekingFirst=1*(Data$Seeking_contagion==Data$First_contagion)
+Risk=c(Data$SeekingFirst,1-Data$SeekingFirst)
+pretest=c(Data$Session_1,Data$Session_3)
+posttest=c(Data$Session_2,Data$Session_4)
+IndData=data.frame(code,id,Domain,Risk,pretest,posttest)
+IndData$Risk[IndData$Risk==1]="Seeking"
+IndData$Risk[IndData$Risk==0]="Averse"
+
+NewIndData=rbind(IndData,IndData)
+NewIndData$session=sort(rep(c("initial","observed"),len_id*2))
+NewIndData$pretest[NewIndData$session=="observed"]=NewIndData$posttest
+NewIndData$preference=NewIndData$pretest
+NewIndData$pretest=c()
+NewIndData$posttest=c()
+```
+```{r}
+
+sup3=ggplot()+
+  geom_line(data=NewIndData,aes(x=session,y=preference,group=code,color=Risk),alpha=0.3,size=1)+
+  facet_wrap(Domain~Risk, nrow=2, ncol = 2, scales = "fixed")+
+  scale_color_manual(values=c("#22DFA9", "#DF22A9"))+
+  theme_bw()#+ theme
+
+sup3
+df<-NewIndData
+means<-aggregate(df$preference,by=list(df$Domain,df$Risk,df$session),FUN=median) 
+sd<-aggregate(df$preference,by=list(df$Domain,df$Risk,df$session),FUN=sd) 
+N<-aggregate(df$preference,by=list(df$Domain,df$Risk,df$session),FUN=length)
+data1<-data.frame(means,sd=sd$x,N=N$x) 
+colnames(data1)=c("Domain","Risk","session","mean","sd","N")
+data1$se <- data1$sd / sqrt(data1$N)
+sup3=sup3+geom_point(data=data1,aes(x=session,y=mean),size=2)+
+  geom_errorbar(data=data1,aes(session,ymin=mean-sd,ymax=mean+sd),width=0,size=1)+
+  theme(axis.text.x=element_text(angle=45,size=10, vjust=1, hjust=1))+
+  labs(color="Observee's 
+Risk-preference", y="Risk-preference")+
+  facet_wrap(Domain~Risk, nrow=2, ncol = 2, scales = "fixed")
+  
+  
+
+jpeg(file = "aSup3_IndividualContagion.jpg",width =1600,height = 1400,units = "px",res =300) 
+sup3
+dev.off()
+sup3
+
+
+```
+```{r}
+lm1=lm(distance~Domain*Risk,data=NewData)
+summary(lm1)
+
+summary(aov(distance~Domain*Risk+Error(id/Risk),data=NewData))
+```
+```{r}
+dis_Loss_Averse=NewData$distance[NewData$Domain=="Loss" & NewData$Risk=="Averse"]
+dis_Loss_Seeking=NewData$distance[NewData$Domain=="Loss" & NewData$Risk=="Seeking"]
+dis_Gain_Averse=NewData$distance[NewData$Domain=="Gain" & NewData$Risk=="Averse"]
+dis_Gain_Seeking=NewData$distance[NewData$Domain=="Gain" & NewData$Risk=="Seeking"]
+
+t.test(dis_Gain_Seeking,dis_Loss_Seeking,paired = FALSE)
+t.test(dis_Gain_Averse,dis_Loss_Averse,paired = FALSE)
+t.test(dis_Gain_Averse,dis_Gain_Seeking,paired = TRUE)
+t.test(dis_Loss_Averse,dis_Loss_Seeking,paired = TRUE)
+```
+
+```{r}
+df=NewData
+mean=aggregate(df$distance,by=list(df$Domain,df$Risk),FUN=mean)
+sd=aggregate(df$distance,by=list(df$Domain,df$Risk),FUN=sd) 
+N=aggregate(df$distance,by=list(df$Domain,df$Risk),FUN=length)
+data2=data.frame(mean,sd=sd$x,N=N$x) 
+colnames(data2)=c("Domain","Risk","distance","sd","N")
+data2$se = data2$sd / sqrt(data2$N) 
+
+fig4=ggplot(data2, aes(x=Domain,y=distance,fill=Risk))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.9,size=1)+
+  geom_errorbar(aes(ymin=distance-se,ymax=distance+se),width=0.2, size=1,position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  geom_signif(y_position=c(0.02), xmin=c(1.775), xmax=c(2.225), annotation=c("n.s."), tip_length=0.05, size=0.4, textsize = 5,vjust = 0)+
+  geom_signif(y_position=c(0.02), xmin=c(0.775), xmax=c(1.225),annotation=c("**"), tip_length=0.05, size=0.4, textsize = 7,vjust = 0.5)+
+  labs(x="Decision Frame", y="Distance in risk preference
+participants vs. the observees", fill="Observee's risk
+ preference")+
+  theme_bw()+
+  theme
+
+jpeg(file = "aFig4_InterDistance.jpg",width =2200,height = 1400,units = "px",res =300) 
+fig4
+dev.off()
+fig4
+```
+```{r}
+NewData$contagion_ratio=NewData$contagion/NewData$distance
+df=NewData
+ratio_Loss_Averse=df$contagion_ratio[df$Domain=="Loss" & df$Risk=="Averse"]
+ratio_Loss_Seeking=df$contagion_ratio[df$Domain=="Loss" & df$Risk=="Seeking"]
+ratio_Gain_Averse=df$contagion_ratio[df$Domain=="Gain" & df$Risk=="Averse"]
+ratio_Gain_Seeking=df$contagion_ratio[df$Domain=="Gain" & df$Risk=="Seeking"]
+
+t.test(ratio_Gain_Seeking,ratio_Loss_Seeking,paired = FALSE)
+t.test(ratio_Gain_Averse,ratio_Loss_Averse,paired = FALSE)
+t.test(ratio_Gain_Averse,ratio_Gain_Seeking,paired = TRUE)
+t.test(ratio_Loss_Averse,ratio_Loss_Seeking,paired = TRUE)
+```
+```{r}
+
+
+
+mean=aggregate(df$contagion_ratio,by=list(df$Domain,df$Risk),FUN=mean)
+sd=aggregate(df$contagion_ratio,by=list(df$Domain,df$Risk),FUN=sd) 
+N=aggregate(df$contagion_ratio,by=list(df$Domain,df$Risk),FUN=length)
+data2=data.frame(mean,sd=sd$x,N=N$x) 
+colnames(data2)=c("Domain","Risk","contagion_ratio","sd","N")
+data2$se = data2$sd / sqrt(data2$N) 
+
+fig5=ggplot(data2, aes(x=Domain,y=contagion_ratio,fill=Risk))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.9,size=1)+
+  geom_errorbar(aes(ymin=contagion_ratio-se,ymax=contagion_ratio+se),width=0.2, size=1,position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  geom_signif(y_position=c(0.88), xmin=c(1.775), xmax=c(2.225), annotation=c("**"), tip_length=0.05, size=0.4, textsize = 7,vjust = 0.5)+
+  geom_signif(y_position=c(0.88), xmin=c(0.775), xmax=c(1.225),annotation=c("*"), tip_length=0.05, size=0.4, textsize = 7,vjust = 0.5)+
+  labs(x="Decision Frame", y="Contagion Ratio", fill="Observee's risk
+ preference")+
+  theme_bw()+
+  theme
+
+jpeg(file = "aFig5_InterContagion_ratio.jpg",width =2200,height = 1400,units = "px",res =300) 
+fig5
+dev.off()
+fig5
+```
+```{r}
+NewData$contagion_ratio=NewData$contagion/NewData$distance
+df=NewData
+ratio_Averse=df$contagion_ratio[df$Risk=="Averse"]
+ratio_Seeking=df$contagion_ratio[df$Risk=="Seeking"]
+t.test(ratio_Averse,ratio_Seeking,paired = FALSE)
+```
+```{r}
+
+mean=aggregate(df$contagion_ratio,by=list(df$Risk),FUN=mean)
+sd=aggregate(df$contagion_ratio,by=list(df$Risk),FUN=sd) 
+N=aggregate(df$contagion_ratio,by=list(df$Risk),FUN=length)
+data3=data.frame(mean,sd=sd$x,N=N$x) 
+colnames(data3)=c("Risk","contagion_ratio","sd","N")
+data3$se = data3$sd / sqrt(data3$N) 
+
+WORD_SIZE = 15
+fig6=ggplot(data3, aes(x=Risk,y=contagion_ratio,fill=Risk))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.9,size=1)+
+  geom_errorbar(aes(ymin=contagion_ratio-se,ymax=contagion_ratio+se),width=0.2, size=1,position=position_dodge(0.9),color="black")+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  labs(x="Observee's risk preference", y="Contagion Ratio")+
+  geom_signif(y_position=c(0.72), xmin=c(1), xmax=c(2),annotation=c("***"), tip_length=0.05, size=0.4, textsize = 7,vjust = 0.5)+
+  theme_bw()+
+  guides(fill=F)+
+  theme
+
+  
+jpeg(file = "aFig6_contagion_ratio_risk.jpg",width =1100,height = 1400,units = "px",res =300) 
+fig6
+dev.off()
+fig6
+```
+```{r}
+summary(lm(contagion~distance*Risk, data=NewData))
+
+summary(lm(contagion~distance, data=NewData[NewData$Risk=="Averse",]))
+
+summary(lm(contagion~distance, data=NewData[NewData$Risk=="Seeking",]))
+
+```
+```{r}
+summary(lm(contagion~distance, data=NewData))
+
+```
+
+
+```{r}
+
+fig7=ggplot(df, aes(x=distance, y=contagion, color=Risk)) + 
+  geom_point(size=5,alpha=0.5)+
+  scale_color_manual(values=c("#22DFA9","#DF22A9"))+
+  geom_smooth(method=lm,se=F,size=1.3,alpha=1)+
+  labs(y="Contagion effect", x="Distance in risk preference
+participants vs. the observees", shape="Observee's 
+risk preference",color="Decision Frame")+
+  theme_bw()+
+  theme 
+jpeg(file = "aFig7_riskDis_con.jpg",width =1800,height = 1400,units = "px",res =300) #结果保存
+fig7
+dev.off()
+fig7
+
+
+```
+
+```{r}
+
+fig8=ggplot(df, aes(x=distance, y=contagion)) + 
+  geom_point(size=5,alpha=0.5)+
+  geom_smooth(method=lm,se=F,size=1.3,alpha=1)+
+  labs(y="Contagion effect", x="Distance in risk preference
+participants vs. the observees", shape="Observee's 
+risk preference",color="Decision Frame")+
+  theme_bw()+
+  theme 
+jpeg(file = "aFig8_Dis_con.jpg",width =1500,height = 1400,units = "px",res =300) #结果保存
+fig8
+dev.off()
+fig8
+
+
+```
+# regression to baseline
+```{r}
+e1<-aggregate(Data$Session_1,by=list(Data$Domain),FUN=mean)
+e2<-aggregate(Data$Session_2,by=list(Data$Domain),FUN=mean)
+e3<-aggregate(Data$Session_3,by=list(Data$Domain),FUN=mean)
+e4<-aggregate(Data$Session_4,by=list(Data$Domain),FUN=mean)
+sd1<-aggregate(Data$Session_1,by=list(Data$Domain),FUN=sd)
+sd2<-aggregate(Data$Session_2,by=list(Data$Domain),FUN=sd)
+sd3<-aggregate(Data$Session_3,by=list(Data$Domain),FUN=sd)
+sd4<-aggregate(Data$Session_4,by=list(Data$Domain),FUN=sd)
+N<-aggregate(Data$id,by=list(Data$Domain),FUN=length)
+me=matrix(c(e1$x,e2$x,e3$x,e4$x),nr=2,nc=4)
+sd=matrix(c(sd1$x,sd2$x,sd3$x,sd4$x),nr=2,nc=4)
+
+M=c(me[1,c(1:4)],me[2,c(1:4)])
+SD=c(sd[1,c(1:4)],sd[2,c(1:4)])
+N=rep(c(20,21),each=4)
+SE=SD/sqrt(N)
+ses=rep(c(1:4),2)
+domain=rep(c("Gain","Loss"),each=4)
+
+D<-data.frame(ses,domain,M,SE) 
+
+riskPreference=c(Data$Session_1,Data$Session_2,Data$Session_3,Data$Session_4)
+ID=factor(rep(c(Data$id),4))
+domain=factor(rep(c(Data$Domain),4))
+session=factor(rep(c(1:4),each=length(Data$id)))
+DDV=data.frame(ID,session,domain,riskPreference)
+
+dis_aov<-aov(riskPreference ~ domain * session + Error(ID/session), data = DDV)
+summary(dis_aov)
+```
+
+```{r}
+fig101<-ggplot(D, aes(x= ses,y=M,fill=factor(domain),color=domain)) + 
+  geom_ribbon(aes(ymax = M+SE, ymin = M-SE,fill=factor(domain)),alpha=0.3,color=0,size=0)+
+  geom_line(size=1.4,alpha=1) +
+  scale_color_manual(values=c("red","blue"))+
+  scale_fill_manual(values=c("#FF77CC", "#77CCFF"))+
+  geom_signif(y_position=c(0.01), xmin=c(2), xmax=c(4),annotation=c("n.s."), tip_length=0, size=0.5, textsize = 7,vjust = 0,color="black")+
+  theme_bw()+ 
+  guides(fill=F)+
+  labs(x="Session", y="Risk Preference",fill="Observee's risk")+
+  theme+ 
+  #ylim(c(-0.15,0.13))
+
+jpeg(file = "aFig101_RegressToMean.jpg",width =1800,height = 1400,units = "px",res =300) #结果保存
+fig101
+dev.off()
+fig101
+
+```
+```{r}
+Data_abs=Data
+
+Data_abs$Session_1=abs(Data_abs$Session_1)
+Data_abs$Session_2=abs(Data_abs$Session_2)
+Data_abs$Session_3=abs(Data_abs$Session_3)
+Data_abs$Session_4=abs(Data_abs$Session_4)
+
+e1<-aggregate(Data_abs$Session_1,by=list(Data_abs$Domain),FUN=mean)
+e2<-aggregate(Data_abs$Session_2,by=list(Data_abs$Domain),FUN=mean)
+e3<-aggregate(Data_abs$Session_3,by=list(Data_abs$Domain),FUN=mean)
+e4<-aggregate(Data_abs$Session_4,by=list(Data_abs$Domain),FUN=mean)
+sd1<-aggregate(Data_abs$Session_1,by=list(Data_abs$Domain),FUN=sd)
+sd2<-aggregate(Data_abs$Session_2,by=list(Data_abs$Domain),FUN=sd)
+sd3<-aggregate(Data_abs$Session_3,by=list(Data_abs$Domain),FUN=sd)
+sd4<-aggregate(Data_abs$Session_4,by=list(Data_abs$Domain),FUN=sd)
+N<-aggregate(Data_abs$id,by=list(Data_abs$Domain),FUN=length)
+me=matrix(c(e1$x,e2$x,e3$x,e4$x),nr=2,nc=4)
+sd=matrix(c(sd1$x,sd2$x,sd3$x,sd4$x),nr=2,nc=4)
+
+M=c(me[1,c(1:4)],me[2,c(1:4)])
+SD=c(sd[1,c(1:4)],sd[2,c(1:4)])
+N=rep(c(20,21),each=4)
+SE=SD/sqrt(N)
+ses=rep(c(1:4),2)
+domain=rep(c("Gain","Loss"),each=4)
+
+D<-data.frame(ses,domain,M,SE) 
+
+riskPreference=c(Data_abs$Session_1,Data_abs$Session_2,Data_abs$Session_3,Data_abs$Session_4)
+ID=factor(rep(c(Data_abs$id),4))
+domain=factor(rep(c(Data_abs$Domain),4))
+session=factor(rep(c(1:4),each=length(Data_abs$id)))
+DDV=data.frame(ID,session,domain,riskPreference)
+
+dis_aov<-aov(riskPreference ~ domain * session + Error(ID/session), data = DDV)
+summary(dis_aov)
+```
+```{r}
+
+fig102<-ggplot(D, aes(x= ses,y=M,fill=factor(domain),color=domain)) + 
+  geom_ribbon(aes(ymax = M+SE, ymin = M-SE,fill=factor(domain)),alpha=0.3,color=0,size=0)+
+  geom_line(size=1.4,alpha=1) +
+  scale_color_manual(values=c("red","blue"))+
+  scale_fill_manual(values=c("#FF77CC", "#77CCFF"))+
+  geom_signif(y_position=c(0.013), xmin=c(1), xmax=c(4),annotation=c("n.s."), tip_length=0, size=0.5, textsize = 7,vjust = 0,color="black")+
+  theme_bw()+ 
+  guides(fill=F)+
+  labs(x="Session", y="Risk Preference",fill="Observee's risk")+
+  theme+ 
+  #ylim(c(0,0.2))
+
+jpeg(file = "aFig102_RegressToNeutral.jpg",width =1800,height = 1400,units = "px",res =300) #结果保存
+fig102
+dev.off()
+fig102
+```
+```{r}
+Data_base=Data
+Session_1=c(rep(mean(Data_base$Session_1[Data_base$Domain=="Gain"]),length(Data$id[Data$Domain=="Gain"])),rep(mean(Data_base$Session_1[Data_base$Domain=="Loss"]),length(Data$id[Data$Domain=="Loss"])))
+Data_base$Session_2=abs(Data_base$Session_2-Session_1)
+Data_base$Session_3=abs(Data_base$Session_3-Session_1)
+Data_base$Session_4=abs(Data_base$Session_4-Session_1)
+Data_base$Session_1=abs(Data_base$Session_1-Session_1)
+
+e1<-aggregate(Data_base$Session_1,by=list(Data_base$Domain),FUN=mean)
+e2<-aggregate(Data_base$Session_2,by=list(Data_base$Domain),FUN=mean)
+e3<-aggregate(Data_base$Session_3,by=list(Data_base$Domain),FUN=mean)
+e4<-aggregate(Data_base$Session_4,by=list(Data_base$Domain),FUN=mean)
+sd1<-aggregate(Data_base$Session_1,by=list(Data_base$Domain),FUN=sd)
+sd2<-aggregate(Data_base$Session_2,by=list(Data_base$Domain),FUN=sd)
+sd3<-aggregate(Data_base$Session_3,by=list(Data_base$Domain),FUN=sd)
+sd4<-aggregate(Data_base$Session_4,by=list(Data_base$Domain),FUN=sd)
+N<-aggregate(Data_base$id,by=list(Data_base$Domain),FUN=length)
+me=matrix(c(e1$x,e2$x,e3$x,e4$x),nr=2,nc=4)
+sd=matrix(c(sd1$x,sd2$x,sd3$x,sd4$x),nr=2,nc=4)
+
+M=c(me[1,c(1:4)],me[2,c(1:4)])
+SD=c(sd[1,c(1:4)],sd[2,c(1:4)])
+N=rep(c(20,21),each=4)
+SE=SD/sqrt(N)
+ses=rep(c(1:4),2)
+domain=rep(c("Gain","Loss"),each=4)
+
+D<-data.frame(ses,domain,M,SE) 
+
+riskPreference=c(Data_base$Session_1,Data_base$Session_2,Data_base$Session_3,Data_base$Session_4)
+ID=factor(rep(c(Data_base$id),4))
+domain=factor(rep(c(Data_base$Domain),4))
+session=factor(rep(c(1:4),each=length(Data_base$id)))
+DDV=data.frame(ID,session,domain,riskPreference)
+
+dis_aov<-aov(riskPreference ~ domain * session + Error(ID/session), data = DDV)
+summary(dis_aov)
+```
+```{r}
+fig103a<-ggplot(D, aes(x= ses,y=M,fill=factor(domain),color=domain)) + 
+  geom_ribbon(aes(ymax = M+SE, ymin = M-SE,fill=factor(domain)),alpha=0.3,color=0,size=0)+
+  geom_line(size=1.4,alpha=1) +
+  scale_color_manual(values=c("red","blue"))+
+  scale_fill_manual(values=c("#FF77CC", "#77CCFF"))+
+  geom_signif(y_position=c(0.013), xmin=c(1), xmax=c(4),annotation=c("n.s."), tip_length=0, size=0.5, textsize = 7,vjust = 0,color="black")+
+  theme_bw()+ 
+  guides(fill=F)+
+  labs(x="Session", y="Risk Preference",fill="Observee's risk")+
+  theme+ 
+  #ylim(c(0,0.2))
+
+jpeg(file = "aFig103a_regressToBaseline.jpg",width =1800,height = 1400,units = "px",res =300) #结果保存
+fig103a
+dev.off()
+fig103a
+```
+```{r}
+
+Data_base=Data
+Session_1=Data_base$Session_1
+Data_base$Session_2=abs(Data_base$Session_2-Session_1)
+Data_base$Session_3=abs(Data_base$Session_3-Session_1)
+Data_base$Session_4=abs(Data_base$Session_4-Session_1)
+Data_base$Session_1=abs(Data_base$Session_1-Session_1)
+
+e1<-aggregate(Data_base$Session_1,by=list(Data_base$Domain),FUN=mean)
+e2<-aggregate(Data_base$Session_2,by=list(Data_base$Domain),FUN=mean)
+e3<-aggregate(Data_base$Session_3,by=list(Data_base$Domain),FUN=mean)
+e4<-aggregate(Data_base$Session_4,by=list(Data_base$Domain),FUN=mean)
+sd1<-aggregate(Data_base$Session_1,by=list(Data_base$Domain),FUN=sd)
+sd2<-aggregate(Data_base$Session_2,by=list(Data_base$Domain),FUN=sd)
+sd3<-aggregate(Data_base$Session_3,by=list(Data_base$Domain),FUN=sd)
+sd4<-aggregate(Data_base$Session_4,by=list(Data_base$Domain),FUN=sd)
+N<-aggregate(Data_base$id,by=list(Data_base$Domain),FUN=length)
+me=matrix(c(e1$x,e2$x,e3$x,e4$x),nr=2,nc=4)
+sd=matrix(c(sd1$x,sd2$x,sd3$x,sd4$x),nr=2,nc=4)
+
+M=c(me[1,c(1:4)],me[2,c(1:4)])
+SD=c(sd[1,c(1:4)],sd[2,c(1:4)])
+N=rep(c(20,21),each=4)
+SE=SD/sqrt(N)
+ses=rep(c(1:4),2)
+domain=rep(c("Gain","Loss"),each=4)
+
+D<-data.frame(ses,domain,M,SE) 
+
+riskPreference=c(Data_base$Session_1,Data_base$Session_2,Data_base$Session_3,Data_base$Session_4)
+ID=factor(rep(c(Data_base$id),4))
+domain=factor(rep(c(Data_base$Domain),4))
+session=factor(rep(c(1:4),each=length(Data_base$id)))
+DDV=data.frame(ID,session,domain,riskPreference)
+
+dis_aov<-aov(riskPreference ~ domain * session + Error(ID/session), data = DDV)
+summary(dis_aov)
+```
+```{r}
+fig103b<-ggplot(D, aes(x= ses,y=M,fill=factor(domain),color=domain)) + 
+  geom_ribbon(aes(ymax = M+SE, ymin = M-SE,fill=factor(domain)),alpha=0.3,color=0,size=0)+
+  geom_line(size=1.4,alpha=1) +
+  scale_color_manual(values=c("red","blue"))+
+  scale_fill_manual(values=c("#FF77CC", "#77CCFF"))+
+  geom_signif(y_position=c(0.017), xmin=c(2), xmax=c(4),annotation=c("n.s."), tip_length=0, size=0.5, textsize = 7,vjust = 0,color="black")+
+  theme_bw()+ 
+  guides(fill=F)+
+  labs(x="Session", y="Risk Preference",fill="Observee's risk")+
+  theme+ 
+#  ylim(c(0,0.2))
+
+jpeg(file = "aFig103b_regressToBaseline.jpg",width =1800,height = 1400,units = "px",res =300) #结果保存
+fig103b
+dev.off()
+fig103b
+```
+```{r}
+d=questionaire
+len_sub=length(d$subject)
+d$ave_r=rep(0,len_sub)
+d$ave_r[c(d$subject%%2==1)]=d$prefer1[c(d$subject%%2==1)]
+d$ave_r[c(d$subject%%2==0)]=d$prefer2[c(d$subject%%2==0)]
+
+d$se_r=rep(0,len_sub)
+d$se_r[c(d$subject%%2==1)]=d$prefer2[c(d$subject%%2==1)]
+d$se_r[c(d$subject%%2==0)]=d$prefer1[c(d$subject%%2==0)]
+
+Rating=c(d$ave_r,d$se_r)
+Risk=rep(c("Averse","Seeking"),each=len_sub)
+ID=c(d$subject,d$subject)
+Domain=ID%/%100
+Domain[Domain==1]="Gain"
+Domain[Domain==2]="Loss"
+
+df<-data.frame(ID,Risk,Domain,Rating)
+
+mean<-aggregate(df$Rating,by=list(df$Risk),FUN=mean)
+sd<-aggregate(df$Rating,by=list(df$Risk),FUN=sd) 
+N<-aggregate(df$Rating,by=list(df$Risk),FUN=length)
+data1<-data.frame(mean,sd=sd$x,N=N$x) 
+colnames(data1)=c("Risk","Rating","sd","N")
+data1$se <- data1$sd / sqrt(data1$N) 
+Observee <-factor(data1$Risk)
+
+WORD_SIZE = 15
+fig201<-ggplot(data1, aes(x=Risk,y=Rating,fill=Risk))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.9,size=1)+
+  geom_errorbar(aes(ymin=Rating-se,ymax=Rating+se),width=0.2, size=1,position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  geom_signif(y_position=c(6), xmin=c(1), xmax=c(2),annotation=c("***"), tip_length=0.05, size=0.4, textsize = 7,vjust = 0.5)+
+  labs( y="Rating of observee's risk preference", x="Observee's risk preference")+
+  theme_bw()+
+  guides(fill=F)+
+  theme
+
+jpeg(file = "Fig201_Rating.jpg",width =1100,height = 1400,units = "px",res =300)
+fig201
+dev.off()
+fig201
+```
+```{r}
+dis_aov<-aov(Rating ~ Domain * Risk + Error(ID/Risk), data = df)
+summary(dis_aov)
+t.test(d$ave_r,d$se_r,paired=T)
+
+olddf=df
+```
+
+```{r}
+d$ave_s=rep(0,len_sub)
+d$ave_s[c(d$subject%%2==1)]=d$similar1[c(d$subject%%2==1)]
+d$ave_s[c(d$subject%%2==0)]=d$similar2[c(d$subject%%2==0)]
+
+d$se_s=rep(0,len_sub)
+d$se_s[c(d$subject%%2==1)]=d$similar2[c(d$subject%%2==1)]
+d$se_s[c(d$subject%%2==0)]=d$similar1[c(d$subject%%2==0)]
+
+dis_aov<-aov(Rating ~ Domain * Risk + Error(ID/Risk), data = df)
+summary(dis_aov)
+
+t.test(d$ave_s,d$se_s,paired=T)
+
+Similar=c(d$ave_s,d$se_s)
+df2<-data.frame(ID,Risk,Domain,Similar)
+
+dis_aov2<-aov(Similar ~ Domain * Risk + Error(ID/Risk), data = df2)
+summary(dis_aov2)
+```
+```{r}
+
+df<-df2
+
+mean<-aggregate(df$Similar,by=list(df$Risk),FUN=mean) 
+sd<-aggregate(df$Similar,by=list(df$Risk),FUN=sd) 
+N<-aggregate(df$Similar,by=list(df$Risk),FUN=length) 
+data1<-data.frame(mean,sd=sd$x,N=N$x) 
+colnames(data1)=c("Risk","Similar","sd","N")
+data1$se <- data1$sd / sqrt(data1$N) 
+Observee <-factor(data1$Risk)
+
+
+
+WORD_SIZE = 15
+
+fig202=ggplot(data1, aes(x=Risk,y=Similar,fill=Risk))+
+  geom_bar(position=position_dodge(), color="white",stat="identity",width=0.9,size=1)+
+  geom_errorbar(aes(ymin=Similar-se,ymax=Similar+se),width=0.2, size=1,position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#22DFA9", "#DF22A9"))+
+  geom_signif(y_position=c(5), xmin=c(1), xmax=c(2),annotation=c("**"), tip_length=0.05, size=0.4, textsize = 7,vjust = 0.5)+
+  labs( y="Rating of similarity between 
+participant's and observee's risk preference", x="Observee's risk preference")+
+  theme_bw()+
+  guides(fill=F)+
+  theme
+
+jpeg(file = "Fig202_Similar.jpg",width =1100,height = 1700,units = "px",res =300) 
+fig202
+dev.off()
+fig202
+```
+```{r}
+exclude=c("1_3","2_24")
+originalData=oldData
+oldData=oldData[!(oldData$code %in% exclude),]
+
+data_averse=oldData[,c("Domain","id","Averse_contagion","Averse_distance")]
+colnames(data_averse)=c("Domain","id","contagion","distance")
+data_averse$Risk=rep("Averse",length(data_averse$id))
+data_seeking=oldData[,c("Domain","id","Seeking_contagion","Seeking_distance")]
+colnames(data_seeking)=c("Domain","id","contagion","distance")
+data_seeking$Risk=rep("Seeking",length(data_seeking$id))
+
+NewData2=rbind(data_averse,data_seeking)
+NewData2$similar=c(d$ave_s,d$se_s)
+
+NewData2$risk[NewData2$Risk=="Averse"]=1
+NewData2$risk[NewData2$Risk=="Seeking"]=2
+NewData2$domain[NewData2$Domain=="Gain"]=1
+NewData2$domain[NewData2$Domain=="Loss"]=2
+
+summary(lm(contagion ~ similar, data=NewData2))
+summary(lm(contagion ~ similar*Risk, data=NewData2))
+summary(lm(contagion ~ Risk, data=NewData2))
+```
+```{r}
+New2=NewData2[,c("contagion","domain","risk","distance","similar")]
+b=cor(New2,method="pearson")
+cor.test(NewData2$contagion,NewData2$similar)
+cor.test(NewData2$distance,NewData2$similar)
+
+jpeg(file = "aFig205_similar_cor.jpg",width =1400,height = 1400,units = "px",res =300) 
+corrplot(b,method="color",type="upper",addCoef.col="gray")
+dev.off()
+corrplot(b,method="color",type="upper",addCoef.col="gray")
+
+```
+```{r}
+
+fig203=ggplot(NewData2, aes(x=similar, y=contagion)) + 
+  geom_point(size=5,alpha=0.5,color="orange")+
+  geom_smooth(method=lm,se=F,size=1.3,alpha=1,color="black")+
+  labs(y="Cotagion effect", x="Rating of similarity between 
+participant's and observee's risk preference")+
+  theme_bw()+
+  theme
+
+jpeg(file = "aFig203_similar_con.jpg",width =1800,height = 1400,units = "px",res =300) #结果保存
+fig203
+dev.off()
+fig203
+```
+```{r}
+
+fig204=ggplot(NewData2, aes(x=similar, y=distance)) + 
+  geom_point(size=5,alpha=0.5,color="green")+
+  geom_smooth(method=lm,se=F,size=1.3,alpha=1,color="black")+
+  labs(y="Distance in risk preference
+participants vs. the observees", x="Rating of similarity between 
+participant's and observee's risk preference")+
+  theme_bw()+
+  theme
+
+jpeg(file = "aFig204_similar_dis.jpg",width =1800,height = 1400,units = "px",res =300) 
+fig204
+dev.off()
+fig204
+
+```
+```{r}
+Data_pre$domain=Data_pre$id%/%100
+Data_pre$Domain=Data_pre$domain
+Data_pre$Domain[Data_pre$Domain==1]="Gain"
+Data_pre$Domain[Data_pre$Domain==2]="Loss"
+Pre=Data_pre[,c("id","domain","session","ChooseGamble","seq","correct")]
+
+m_C=aggregate(Pre$correct,by=list(Pre$id,Pre$domain,Pre$session,Pre$seq),FUN=mean)
+m_G=aggregate(Pre$ChooseGamble,by=list(Pre$id,Pre$domain,Pre$session,Pre$seq),FUN=mean)
+
+start=rep(c(originalData$Session_1,originalData$Session_3),3)
+present=rep(c(originalData$Session_2,originalData$Session_4),3)
+
+D<-data.frame(m_G,m_C$x,start,present) 
+colnames(D)=c("ID","Domain","Session","seq","IsSeeking","Correct","start","present")
+D$IsSeeking=c(D$IsSeeking>0.5)*1
+D$startCongruence=c(D$IsSeeking==(D$start>0))*1
+D$presentCongruence=c(D$IsSeeking==(D$present>0))*1
+
+Res_aov1<-aov(Correct ~ Domain* seq *IsSeeking + Error(ID/(seq+IsSeeking)), data = D)
+summary(Res_aov1)
+
+Res_aov1<-aov(Correct ~ seq *IsSeeking + Error(ID/(seq+IsSeeking)), data = D)
+summary(Res_aov1)
+
+Res_aov2<-aov(Correct ~ seq *startCongruence + Error(ID/(seq+IsSeeking)), data = D)
+summary(Res_aov2)
+```
+```{r}
+
+lmm0 <- lm(Correct ~ seq *start, data = D)
+summary(lmm0)
+
+lmmk <- lm(Correct ~ seq *startCongruence, data = D)
+summary(lmmk)
+
+lmml <- lm(Correct ~ seq *IsSeeking, data = D)
+summary(lmml)
+
+lmmm <- lm(Correct ~ seq *IsSeeking*startCongruence, data = D)
+summary(lmmm)
+```
+```{r}
+
+b<-cor(D[c("Correct","IsSeeking","startCongruence","start","present","presentCongruence")])
+jpeg(file = "aFig301_correlationPre_CO.jpg",width =1600,height = 1600,units = "px",res =300) #结果保存
+corrplot(b,method="color",type="upper",addCoef.col="gray")
+dev.off()
+corrplot(b,method="color",type="upper",addCoef.col="gray")
+
+cor.test(D$Correct,D$IsSeeking)#*
+cor.test(D$Correct,D$startCongruence)#**
+cor.test(D$Correct,D$presentCongruence)#***
+cor.test(D$startCongruence,D$IsSeeking)#**
+```
+```{r}
+  
+lmm1 <- lm(Correct ~ Domain*startCongruence +seq*Domain + seq *startCongruence, data = D)
+summary(lmm1)
+
+lmm2 <- lm(Correct ~ Domain*IsSeeking +seq*Domain + seq *IsSeeking, data = D)
+summary(lmm2)
+
+t.test(D$Correct[D$startCongruence==1 & D$seq==0],D$Correct[D$startCongruence==0 & D$seq==0],paired = F)
+t.test(D$Correct[D$IsSeeking==1 & D$seq==0],D$Correct[D$IsSeeking==0 & D$seq==0],paired = F)
+
+```
+```{r}
+D$startCongruence[D$startCongruence==1]="Congruent"
+D$startCongruence[D$startCongruence==0]="Incongruent"
+
+D$IsSeeking[D$IsSeeking==1]="risk_seeking"
+D$IsSeeking[D$IsSeeking==0]="risk_averse"
+
+risk_C<-aggregate(D$Correct,by=list(D$seq,D$IsSeeking),FUN=mean)  
+risk_sd<-aggregate(D$Correct,by=list(D$seq,D$IsSeeking),FUN=sd)  
+con_C<-aggregate(D$Correct,by=list(D$seq,D$startCongruence),FUN=mean)  
+con_sd<-aggregate(D$Correct,by=list(D$seq,D$startCongruence),FUN=sd)  
+N_risk<-aggregate(D$Correct,by=list(D$seq,D$IsSeeking),FUN=length) 
+N_con<-aggregate(D$Correct,by=list(D$seq,D$startCongruence),FUN=length)
+
+D_risk<-data.frame(N_risk,risk_C$x,risk_sd$x) 
+D_con<-data.frame(N_con,con_C$x,con_sd$x) 
+colnames(D_risk)=c("Sequence","IsSeeking","N","Correct","sd")
+colnames(D_con)=c("Sequence","Congruence","N","Correct","sd")
+
+D_risk$SE=D_risk$sd/sqrt(D_risk$N)
+D_con$SE=D_con$sd/sqrt(D_con$N)
+
+
+
+fig302=ggplot(D_con, aes(x= Sequence,y=Correct,fill=factor(Congruence)))  +
+  geom_ribbon(aes(ymax = Correct+SE, ymin = Correct-SE,fill=factor(Congruence)),alpha=0.4,color=0,size=0)+
+  scale_fill_manual(values=c("green", "cyan"))+
+  geom_line(size=1.4,alpha=1,color=rep(c("#00DD33","#00DDDD"),each=3))+
+  
+  geom_signif(y_position=c(0.4), xmin=c(0), xmax=c(0),annotation=c("***"), tip_length=0, size=0, textsize = 7,vjust = 0,color="black")+
+ theme_bw()+ 
+  labs(x="Session", y="P(correct prediction)",fill="Preference 
+Congruence")+
+  theme+xlim(c(-0.5,2.5))
+jpeg(file = "Fig302_PredictByCon.jpg",width =1900,height = 1400,units = "px",res =300) 
+fig302
+dev.off()
+fig302
+```
+```{r}
+
+fig303=ggplot(D_risk, aes(x= Sequence,y=Correct,fill=factor(IsSeeking)))  +
+  geom_ribbon(aes(ymax = Correct+SE, ymin = Correct-SE,fill=factor(IsSeeking)),alpha=0.4,color=0,size=0)+
+  scale_fill_manual(values=c("#22DFA9","#DF22A9"))+
+  geom_line(size=1.4,alpha=1,color=rep(c("#22DFA9","#DF22A9"),each=3))+
+  geom_signif(y_position=c(0.4), xmin=c(0), xmax=c(0),annotation=c("***"), tip_length=0, size=0, textsize = 7,vjust = 0,color="black")+
+  theme_bw()+ 
+  labs(x="Session", y="P(correct prediction)",fill="Observee's Risk
+Preference")+
+  theme+xlim(c(-0.5,2.5))
+jpeg(file = "Fig303_PredictByRisk.jpg",width =1900,height = 1400,units = "px",res =300) 
+fig303
+dev.off()
+fig303
+
+
+
+```
+
+
